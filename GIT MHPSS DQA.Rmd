@@ -1,0 +1,222 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-10-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "MHPSS DQA for wk 40"
+output: html_document
+date: "2024-10-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+if(!require(pacman)) install.packages("pacman")
+pacman::p_load(tidyverse,
+               readxl,
+               lubridate,
+               ggplot)
+
+#install.packages('tinytex')
+#tinytex::install_tinytex()
+
+```
+
+
+```{r import data,echo=FALSE,message=FALSE,warning=FALSE}
+
+mhpss_wk40 <- read_excel("C:/Users/jkaladokubo/OneDrive - Heartland Alliance Limited/KP CARE 1 MHPSS Data wk 40.xlsx")
+#view(mhpss_wk40)
+
+```
+
+# Wrangle data----
+```{r,message=FALSE,warning=FALSE}
+
+mh_recent_clean_40 <-
+  mhpss_wk40 %>%
+  distinct(`Patient ID` , .keep_all = TRUE) %>%
+  mutate(
+    dt_contact = as_date(`Contacted Date (yyyy-MM-dd)`),
+    mth_contact = month(dt_contact, abbr = TRUE, label = TRUE),
+    yr_contact = year(dt_contact),
+    Facility = str_replace(`Facility Name`, "KP One Stop Shop", "OSS"),
+    Qtr = quarter(dt_contact, fiscal_start = 1, with_year = TRUE)
+  ) %>%
+  select(`Facility Name`, mth_contact, yr_contact, dt_contact, contains("mth_yr"), contains("contact"), everything())
+
+```
+
+
+
+## summarize----
+```{r,message=FALSE,warning=FALSE}
+mh_recent_clean_sum_40 <- 
+  mh_recent_clean_40 %>%
+  arrange(`Facility Name`, dt_contact) %>% 
+  group_by(`Facility Name`, yr_contact, mth_contact) %>%  # Group by facility, year, and month to ensure all months are processed
+  summarise(mh_served = n()) %>%  # Count patients served per facility, per month
+  ungroup() %>%
+  group_by(`Facility Name`) %>%  # Group again by Facility Name for cumulative sum
+  mutate(
+    mh_served_cum = cumsum(mh_served),  # Calculate cumulative sum
+    dt2_contact = make_date(year = yr_contact, month = mth_contact, day = 1),  # Create new date column for plotting
+    dt3_contact = paste(year = yr_contact, month = mth_contact, day = 1,sep = "-"),
+    dt4_contact = paste0(year = yr_contact, month = mth_contact, day = 1),
+
+  ) #%>% 
+ # ungroup()
+
+
+```
+
+
+##lineplot trend of mh cumm client----
+
+```{r,fig.width=10,fig.height=8}
+mh_recent_clean_sum_40 %>% 
+  filter(between(dt2_contact, last(dt2_contact) - months(5), last(dt2_contact))) %>%
+  ggplot(aes(dt2_contact, mh_served_cum)) +
+  geom_point(aes(color = dt2_contact)) +
+  geom_text(aes(
+    label = scales::comma(mh_served_cum),
+    group = dt2_contact,
+    hjust = ifelse(mh_served_cum<max(mh_served_cum)*.75,-0.5,1.5),  # Adjust vertical position
+    #y_nudge = 4000
+  ), check_overlap = FALSE, 
+  size = 3, 
+  angle = 90,
+  
+  ) +  # Adjust text size and avoid overlap
+  scale_color_date(
+    name = "Recent Months",
+    low = "red",
+    high = "green3",
+    na.value = "grey50",
+    guide = "legend"
+  ) +  
+  scale_x_date(
+    date_labels = "%b %y",
+    date_breaks = "1 month"
+  ) +
+  geom_line(aes(color = dt2_contact)) +
+  facet_wrap(vars(`Facility Name`)) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    panel.background = element_blank(),
+    panel.grid.major.x = element_line(colour = "grey90", linewidth = 0.2)
+  ) +
+  labs(
+    title = "Monthly Trend of Cumulative Distinct Mental Health Clients",
+    subtitle = "Performance Across OSS",
+    y = "Cumm. Distinct Patient",
+    x = "Months",
+    size = "Screened New")
+
+
+
+
+```
+
+# Disagg. cascade----
+
+```{r,message=FALSE,warning=FALSE}
+mh_recent_casc_40 <- mh_recent_clean_40 %>%
+  mutate(cd = `Contacted Date (yyyy-MM-dd)` ,  # Correctly assign the date column
+         cd = case_when(
+           nchar(cd) == 10 ~ ymd(cd),  # Convert valid dates
+           TRUE ~ NA_Date_
+         ),
+         Quarter = quarter(cd, type = "year.quarter", fiscal_start = 10),
+         Quarter2 = factor(paste0("Q", quarter(cd), "_", year(cd)))
+  ) %>%
+  distinct(`Patient ID`, .keep_all = TRUE) %>%
+  group_by(`Facility Name`, Quarter, Quarter2) %>%
+  summarise(
+    Screened = n(),
+    Pos_Screen = sum(`Signs Of Pyschosocio Distress` == "YES", na.rm = TRUE),
+    `Brief_Interv.` = sum(`Provided Brief Intervention` == "YES", na.rm = TRUE),
+    Risk = sum(!is.na(`Risk Confirmed`)),
+    PsychRef = sum(`Ref. Psychologist for MHPSS` == "YES", na.rm = TRUE),
+    Confirmed = sum(!is.na(`Confirmation Outcome`)),
+    Treated = sum(!is.na(`Treatment Done`)),
+    AUDIT = sum(!is.na(`AUDIT-C`)),
+    DAST = sum(!is.na(`DAST-10`)),
+    GAD = sum(!is.na(`GAD-7`)),
+    PCL = sum(!is.na(`PCL-5`)),
+    PHQ = sum(!is.na(`PHQ-9`))
+  ) %>%
+  ungroup()
+
+
+```
+
+
+### *pivot cascade with hs by qtr----
+
+```{r,message=FALSE,warning=FALSE}
+mh_recent_casc_piv_hs_qtr_40 <- 
+  mh_recent_casc_40 %>% 
+  pivot_longer(cols =c(Screened,Pos_Screen,Brief_Interv.,Risk,PsychRef,Confirmed,Treated,AUDIT,DAST,GAD,PCL,PHQ), names_to = "Group" ,values_to = "Count") %>% 
+  mutate(Group = factor(Group,levels=c("Screened","Pos_Screen","Brief_Interv.","Risk","PsychRef","Confirmed","Treated","AUDIT","DAST","GAD","PCL","PHQ"))) %>% 
+  group_by(
+    #HIV Status_mh,
+    Group,
+    Quarter2,
+    Quarter
+  ) %>% 
+  summarize(n = sum(Count)) #%>% 
+  #ungroup()
+
+```
+
+
+### *plot cascade with hs by qtr----
+
+```{r,message=FALSE,warning=FALSE}
+
+#mh_recent_casc_piv_hs_qtr2 <- 
+mh_recent_casc_piv_hs_qtr_40 %>% 
+  separate_wider_delim(Quarter,names = c("yr","qtr"),delim = ".",cols_remove = F,) %>% 
+  arrange(desc(yr),qtr) %>% 
+  filter(!is.na(Quarter)) %>% 
+  mutate(yr = as.numeric(yr)) %>% 
+  filter(yr >= 2024) %>%  
+  ggplot(aes(Group,n,fill=Group))+
+  geom_bar(stat="identity",position= position_dodge(width = 15))+
+  geom_label(aes(label = n),fill="white",vjust=-0.3)+
+  #geom_label(aes(label=n,nudge_y = ifelse(n>4000,-2000,2000),fill = "white"),size=4)+
+  theme_minimal()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(angle = 0),
+        strip.text.y = element_text(angle = 0),
+        strip.background.y = element_rect(fill = "grey85",color="grey85"),
+        linewidth = NULL,
+        panel.background = element_rect(fill = "grey90",color = "grey90"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+  )+
+  facet_grid(
+    rows=vars(reorder(Quarter2,Quarter)),
+    #cols=vars(HIV Status_mh)
+  )+
+  labs(title = "Cascade Trend Analysis for Mental Health",
+       subtitle = "Bar Charts Disagg. by HIV Status",
+       y = "Number of KPs Receiving Services by Quarter",
+       x = "Type of Service") +
+  guides(fill = guide_legend(title= "Cascade\nLevels"),
+  )+
+  ylim(0,6000)
+
+
+
+
+```
